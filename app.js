@@ -1,16 +1,37 @@
 const express = require('express')
 const mysql = require('mysql2');
+const multer = require('multer');
+const path = require('path');
 const verifyToken = require('./middleware/auth');
 
 const app = express()
 const port = 3000
 
+
+
 // Add middleware to parse JSON and URL-encoded bodies
 app.use(express.json()); // for parsing application/json
 app.use(express.urlencoded({ extended: true })); // for parsing application/x-www-form-urlencoded
 
-// Use auth routes (if they exist)
-// app.use('/auth', authRoutes);
+// Konfigurasi multer untuk menyimpan file
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/') // Folder penyimpanan
+  },
+  filename: function (req, file, cb) {
+    // Nama file: timestamp + original name
+    const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
+    cb(null, uniqueName);
+  }
+});
+
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB
+  },
+});
 
 // Create the connection to database
 const connection = mysql.createConnection({
@@ -22,7 +43,6 @@ const connection = mysql.createConnection({
 
 const validateEmail = (email) => {
   const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-  // console.log('testing ',  emailRegex.test(email))
   return emailRegex.test(email);
 };
 
@@ -40,9 +60,7 @@ const generateInvoice = () => {
 
 //Registration
 app.post('/registration', async (req, res) => {
-
   let response
-  console.log('Request body:', req.body);
 
   // Additional email format check
   if (!validateEmail(req.body.email)) {
@@ -103,8 +121,6 @@ app.post('/login', async (req, res) => {
       `SELECT * FROM users WHERE email = ? AND password = ?`,
       [req.body.email, req.body.password],
       (error, rows, fields) => {
-        console.log('rows', rows)
-        console.log('fields', fields)
         if (error) {
           console.error('Database error:', error);
           return res.status(500).json({
@@ -152,7 +168,6 @@ app.post('/login', async (req, res) => {
 
 app.get('/profile', verifyToken, (req, res) => {
   const userData = req.user;
-  console.log('userData:', userData);
   return res.status(200).json({
     status: 0,
     message: "Sukses",
@@ -168,7 +183,6 @@ app.get('/profile', verifyToken, (req, res) => {
 
 app.put('/profile/update', verifyToken, async (req, res) => {
   const userData = req.user;
-  console.log('userData:', userData);
   await connection.execute(
     `UPDATE users 
      SET first_name = ?, last_name = ?
@@ -176,7 +190,7 @@ app.put('/profile/update', verifyToken, async (req, res) => {
     [
       req.body.first_name,
       req.body.last_name,
-      req.user.user_id // dari token
+      userData.user_id // dari token
     ]
   );
 
@@ -193,19 +207,46 @@ app.put('/profile/update', verifyToken, async (req, res) => {
   });
 })
 
-app.put('/profile/image', (req, res) => {
-  console.log('profile image')
-  console.log('Request file:', req.file);
-  res.send('Hello World! 2')
+app.put('/profile/image', upload.single('image'), verifyToken, (req, res) => {
+  const userData = req.user;
+  // Validasi img must jpeg/jpg/png
+  const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png'];
+  if (!allowedMimes.includes(req.file.mimetype)) {
+    return res.status(400).json({
+      status: 102,
+      message: 'Format Image tidak sesuai',
+      data: null
+    });
+  } else {
+    
+
+    connection.execute(
+      `UPDATE users 
+        SET profile_image = ?
+        WHERE id = ?`,
+      [
+        req.file.filename,
+        userData.user_id 
+      ]
+    );
+  }
+
+  return res.status(200).json({
+    status: 0,
+    message: "Update Profile Image berhasil",
+    data: {
+      email: userData.email,
+      first_name: userData.first_name,
+      last_name: userData.last_name,
+      profile_image: req.file.filename   
+    }
+  });
 })
 
 app.get('/banner', (req, res) => {
-  console.log('banner')
   connection.execute(
     `SELECT * FROM banner`,
     (error, rows, fields) => {
-      console.log('rows', rows)
-      console.log('fields', fields)
       if (error) {
         console.error('Database error:', error);
         return res.status(500).json({
@@ -213,8 +254,6 @@ app.get('/banner', (req, res) => {
           message: "System error"
         });
       }
-
-      console.log('data ', rows)
       const result = rows
 
       res.status(200).json({
@@ -227,12 +266,9 @@ app.get('/banner', (req, res) => {
 })
 
 app.get('/services', verifyToken, (req, res) => {
-  console.log('services')
   connection.execute(
     `SELECT * FROM services`,
     (error, rows, fields) => {
-      console.log('rows', rows)
-      console.log('fields', fields)
       if (error) {
         console.error('Database error:', error);
         return res.status(500).json({
@@ -240,8 +276,6 @@ app.get('/services', verifyToken, (req, res) => {
           message: "System error"
         });
       }
-
-      console.log('data ', rows)
       const result = rows
 
       res.status(200).json({
@@ -254,18 +288,33 @@ app.get('/services', verifyToken, (req, res) => {
 })
 
 app.get('/balance', verifyToken, (req, res) => {
-  console.log('Balance');
-  console.log('user ', req.user)
-  const userData = req.user
-  res.send('Hello World! 2')
+  const userData = req.user;
+  connection.execute(
+    `SELECT balance FROM users where id = ?`,
+    [userData.user_id],
+    (error, rows, fields) => {
+      if (error) {
+        console.error('Database error:', error);
+        return res.status(500).json({
+          status: 999,
+          message: "System error"
+        });
+      }
+
+      const balance = rows[0].balance
+
+      res.status(200).json({
+        status: 0,
+        message: "Get Balance Berhasil",
+        balance: balance
+      });
+    }
+  );
+
 })
 
 app.post('/topup', verifyToken, async (req, res) => {
   const userData = req.user;
-  console.log('Top up');
-  console.log('Request body:', req.body);
-  console.log('userData:', userData);
-
   let userBalance = 0
 
   const amount = req.body.top_up_amount;
@@ -280,7 +329,7 @@ app.post('/topup', verifyToken, async (req, res) => {
     // Get existing user balance from db
     connection.execute(
       `SELECT balance FROM users where id = ?`,
-      [req.user.user_id],
+      [userData.user_id],
       async (error, rows, fields) => {
         if (error) {
           console.error('Database error:', error);
@@ -295,8 +344,6 @@ app.post('/topup', verifyToken, async (req, res) => {
         //Total balance after top up
         let totalBalance = userBalance + req.body.top_up_amount;
 
-        console.log('totalBalance ', totalBalance)
-
         //Update balance to db
         await connection.execute(
           `UPDATE users 
@@ -304,7 +351,7 @@ app.post('/topup', verifyToken, async (req, res) => {
             WHERE id = ?`,
           [
             totalBalance,
-            req.user.user_id // dari token
+            userData.user_id // dari token
           ]
         );
 
@@ -313,7 +360,7 @@ app.post('/topup', verifyToken, async (req, res) => {
           `INSERT INTO transaction (user_id, nominal, type, description, inv) 
            VALUES (?, ?, ?, ?, ?)`,
           [
-            req.user.user_id,
+            userData.user_id,
             req.body.top_up_amount,
             'TOPUP',
             'Top Up Balance',
@@ -334,10 +381,7 @@ app.post('/topup', verifyToken, async (req, res) => {
 })
 
 app.post('/transaction', verifyToken, (req, res) => {
-  console.log('Transaction');
-  console.log('Request body:', req.body);
   const userData = req.user;
-  console.log('userData:', userData);
 
   connection.execute(
     `SELECT * FROM services where code = ?`,
@@ -353,8 +397,6 @@ app.post('/transaction', verifyToken, (req, res) => {
 
       let dataService = rows[0]
 
-      console.log('dataService ', dataService)
-
       if (dataService.length === 0) {
         return res.status(400).json({
           status: 102,
@@ -365,7 +407,7 @@ app.post('/transaction', verifyToken, (req, res) => {
         //Cek Saldo
         connection.execute(
           `SELECT balance FROM users WHERE id = ?`,
-          [req.user.user_id],
+          [userData.user_id],
           (error, rows, fields) => {
             if (error) {
               console.error('Database error:', error);
@@ -377,8 +419,8 @@ app.post('/transaction', verifyToken, (req, res) => {
 
             let userBalance = rows[0].balance
 
+            //Cek Saldo
             if (userBalance < dataService.tarif) {
-              // console.log('Saldo tidak cukup')
               return res.status(502).json({
                 status: 102,
                 message: "Saldo tidak cukup. Pastikan saldo anda cukup untuk melakukan transaksi",
@@ -387,7 +429,7 @@ app.post('/transaction', verifyToken, (req, res) => {
               //Saldo cukup
               connection.execute(
                 `SELECT balance FROM users where id = ?`,
-                [req.user.user_id],
+                [userData.user_id],
                 async (error, rows, fields) => {
                   if (error) {
                     console.error('Database error:', error);
@@ -411,7 +453,7 @@ app.post('/transaction', verifyToken, (req, res) => {
                       WHERE id = ?`,
                     [
                       totalBalance,
-                      req.user.user_id // dari token
+                      userData.user_id // dari token
                     ]
                   );
 
@@ -420,7 +462,7 @@ app.post('/transaction', verifyToken, (req, res) => {
                     `INSERT INTO transaction (user_id, nominal, type, description, inv) 
                      VALUES (?, ?, ?, ?, ?)`,
                     [
-                      req.user.user_id,
+                      userData.user_id,
                       dataService.tarif,
                       'PAYMENT',
                       dataService.name,
@@ -451,25 +493,17 @@ app.post('/transaction', verifyToken, (req, res) => {
 })
 
 app.get('/transaction/history', verifyToken, (req, res) => {
-  console.log('Transaction History');
-  console.log('Request params:', req.query);
-  console.log('Request body:', req.body);
-
   const userData = req.user;
-  console.log('userData:', userData);
 
   let dataTransaction
 
   let limit = req.query.limit || 0
   let offset = req.query.offset || 0  
 
-  console.log('limit ', limit)
-  console.log('offset ', offset)
-
   if (limit > 0) {
     connection.execute(
       `SELECT * FROM transaction where user_id = ? order by created_on desc limit ? offset ? `,
-      [req.user.user_id, limit, offset],
+      [userData.user_id, limit, offset],
       async (error, rows, fields) => {
         if (error) {
           console.error('Database error:', error);
@@ -480,8 +514,6 @@ app.get('/transaction/history', verifyToken, (req, res) => {
         }
   
         dataTransaction = rows
-  
-        console.log('dataTransaction ', dataTransaction)
   
         return res.status(200).json({
           status: 0,
@@ -497,7 +529,7 @@ app.get('/transaction/history', verifyToken, (req, res) => {
   } else {
     connection.execute(
       `SELECT * FROM transaction where user_id = ? order by created_on desc`,
-      [req.user.user_id],
+      [userData.user_id],
       async (error, rows, fields) => {
         if (error) {
           console.error('Database error:', error);
@@ -508,8 +540,6 @@ app.get('/transaction/history', verifyToken, (req, res) => {
         }
   
         dataTransaction = rows
-  
-        console.log('dataTransaction ', dataTransaction)
   
         return res.status(200).json({
           status: 0,
